@@ -1,0 +1,21 @@
+services:
+  finchvox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        FINCHVOX_GIT_REPO: ${FINCHVOX_GIT_REPO:-https://github.com/yydrift-code/finchvox.git}
+        FINCHVOX_GIT_REF: ${FINCHVOX_GIT_REF:-dev}
+    container_name: finchvox
+    ports:
+      - "4317:4317"
+      - "3000:3000"
+    volumes:
+      - ./finchvox_data:/root/.finchvox
+    restart: unless-stopped
+    networks:
+      - caddy-network
+
+networks:
+  caddy-network:
+    external: true

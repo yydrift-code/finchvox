@@ -1,0 +1,59 @@
+name: Ensure Main To Dev PR
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - Mirror Upstream Main
+    types:
+      - completed
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ensure-main-to-dev-pr
+  cancel-in-progress: false
+
+jobs:
+  ensure-pr:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out dev
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Open or refresh main -> dev PR when needed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin main dev
+
+          ahead_count="$(git rev-list --count refs/remotes/origin/dev..refs/remotes/origin/main)"
+          main_sha="$(git rev-parse --short refs/remotes/origin/main)"
+
+          echo "Commits in main not yet in dev: ${ahead_count}"
+
+          if [ "${ahead_count}" -eq 0 ]; then
+            echo "No upstream updates are pending for dev."
+            exit 0
+          fi
+
+          title="Sync upstream main into dev"
+          body=$'Upstream changes reached `main` and need review before merging into `dev`.\n\n- Source branch: `main`\n- Target branch: `dev`\n- Current upstream mirror SHA: `'"${main_sha}"$'`\n\nThis PR is managed by automation.'
+
+          pr_number="$(gh pr list --base dev --head main --state open --json number --jq '.[0].number')"
+
+          if [ -n "${pr_number}" ]; then
+            gh pr edit "${pr_number}" --title "${title}" --body "${body}"
+            echo "Updated PR #${pr_number}."
+          else
+            gh pr create --base dev --head main --title "${title}" --body "${body}"
+            echo "Created a new main -> dev PR."
+          fi

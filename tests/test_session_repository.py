@@ -19,7 +19,13 @@ def single_session_dir(temp_sessions_dir):
     return temp_sessions_dir
 
 
-def create_session(sessions_dir: Path, session_id: str, start_time_nano: int):
+def create_session(
+    sessions_dir: Path,
+    session_id: str,
+    start_time_nano: int,
+    *,
+    attributes: list[dict] | None = None,
+):
     session_dir = sessions_dir / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -28,6 +34,7 @@ def create_session(sessions_dir: Path, session_id: str, start_time_nano: int):
         "name": "test-span",
         "start_time_unix_nano": start_time_nano,
         "end_time_unix_nano": start_time_nano + 1000000000,
+        "attributes": attributes or [],
     }
     with trace_file.open("w") as f:
         json.dump(span, f)
@@ -135,3 +142,47 @@ class TestSessionRepository:
 
     def test_default_page_size_is_50(self):
         assert DEFAULT_PAGE_SIZE == 50
+
+    @pytest.mark.parametrize(
+        ("attributes", "expected"),
+        [
+            (
+                [
+                    {
+                        "key": "finchvox.session.source",
+                        "value": {"string_value": "client · astl.dev.family"},
+                    }
+                ],
+                "client · astl.dev.family",
+            ),
+            (
+                [
+                    {
+                        "key": "leasing.call_initiator",
+                        "value": {"string_value": "owner"},
+                    },
+                    {
+                        "key": "leasing.ui_host",
+                        "value": {"string_value": "leasing.yytech.by"},
+                    },
+                ],
+                "owner · leasing.yytech.by",
+            ),
+        ],
+    )
+    def test_session_source_is_exposed_in_list_metadata(
+        self,
+        temp_sessions_dir,
+        attributes,
+        expected,
+    ):
+        create_session(
+            temp_sessions_dir,
+            "session-source",
+            1000000000000000000,
+            attributes=attributes,
+        )
+
+        result = SessionRepository(temp_sessions_dir).list_paginated()
+
+        assert result.sessions[0]["session_source"] == expected

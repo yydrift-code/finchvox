@@ -77,6 +77,7 @@
             <thead>
                 <tr class="border-b border-white/10 text-white/50 text-left">
                     <th class="py-4 px-6 text-xs font-medium tracking-wide">Service Name</th>
+                    <th class="py-4 px-6 text-xs font-medium tracking-wide">Source</th>
                     <th class="py-4 px-6 text-xs font-medium tracking-wide">Session ID</th>
                     <th class="py-4 px-6 text-xs font-medium tracking-wide">Start Time</th>
                     <th class="py-4 px-6 text-xs font-medium tracking-wide">Duration</th>
@@ -90,6 +91,7 @@
                 <template x-for="session in sessions" :key="session.session_id">
                     <tr class="border-b border-white/5 transition-colors even:bg-[#0f0f0f] hover:bg-amber-500/[0.08]">
                         <td class="py-4 px-6 text-white/70 text-sm" x-text="session.service_name || '-'"></td>
+                        <td class="py-4 px-6 text-white/70 text-sm font-mono" x-text="session.session_source || '—'"></td>
                         <td class="py-4 px-6 text-white/70 font-mono text-[13px]">
                             <a class="text-amber-400 underline hover:text-amber-300 transition-colors" :href="`/sessions/${session.session_id}`" x-text="session.session_id"></a>
                         </td>

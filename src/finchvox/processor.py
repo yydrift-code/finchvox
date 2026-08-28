@@ -1,8 +1,9 @@
 import asyncio
 import io
 import json
+import time
 import wave
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 import aiohttp
@@ -89,6 +90,7 @@ class FinchvoxProcessor(FrameProcessor):
         self._collector_warning_shown = False
         self._timing_events = []
         self._conversation_start_time: Optional[datetime] = None
+        self._conversation_start_monotonic: Optional[float] = None
         self._chunk_counter = 0
         self._setup_info: Optional[FrameProcessorSetup] = None
         self._input_frame_count = 0
@@ -162,14 +164,15 @@ class FinchvoxProcessor(FrameProcessor):
         self._audio_buffer = AudioBufferProcessor(
             sample_rate=self._sample_rate,
             num_channels=2,
-            buffer_size=320000,
+            buffer_size=self._chunk_duration * self._sample_rate * 2,
             enable_turn_audio=False,
         )
         self._setup_audio_handler()
 
         await self._audio_buffer.setup(self._setup_info)
 
-        self._conversation_start_time = datetime.now()
+        self._conversation_start_time = datetime.now(timezone.utc)
+        self._conversation_start_monotonic = time.monotonic()
         self._chunk_counter = 0
         self._timing_events = []
         self._input_frame_count = 0
@@ -186,11 +189,16 @@ class FinchvoxProcessor(FrameProcessor):
             try:
                 trace_id = self._get_trace_id()
 
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                captured_at = datetime.now(timezone.utc)
+                conversation_elapsed_seconds = (
+                    time.monotonic() - self._conversation_start_monotonic
+                    if self._conversation_start_monotonic is not None
+                    else None
+                )
                 metadata = {
                     "trace_id": trace_id,
                     "chunk_number": self._chunk_counter,
-                    "timestamp": timestamp,
+                    "timestamp": captured_at.isoformat(),
                     "sample_rate": sample_rate,
                     "num_channels": num_channels,
                     "channels": {"0": "user", "1": "bot"},
@@ -200,6 +208,7 @@ class FinchvoxProcessor(FrameProcessor):
                         if self._conversation_start_time
                         else None
                     ),
+                    "conversation_elapsed_seconds": conversation_elapsed_seconds,
                 }
 
                 upload_success = await self._upload_chunk(

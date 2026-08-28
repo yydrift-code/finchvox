@@ -145,6 +145,23 @@ async def test_pipeline_continues_when_collector_unreachable(
 
 
 @pytest.mark.asyncio
+async def test_chunk_duration_configures_audio_buffer_size(
+    reset_finchvox_state, mock_setup_info
+):
+    finchvox._initialized = True
+    processor = FinchvoxProcessor(chunk_duration_seconds=3, sample_rate=16000)
+    await processor.setup(mock_setup_info)
+    processor.push_frame = AsyncMock()
+
+    await processor.process_frame(
+        StartFrame(enable_tracing=True), FrameDirection.DOWNSTREAM
+    )
+
+    assert processor._audio_buffer._buffer_size == 3 * 16000 * 2
+    await processor.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_end_frame_flows_through_when_disabled(
     reset_finchvox_state, mock_setup_info
 ):

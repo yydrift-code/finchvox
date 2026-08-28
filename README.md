@@ -96,6 +96,8 @@ The proxy must remove any client-supplied access headers and set them itself aft
 
 Tenant users get a conversation-only session view with audio playback and audio-file downloads. Trace, logs, metrics, exceptions, raw data, environment data, full-session downloads, and uploads remain admin-only, including their direct API routes. Requests for another tenant's session return `404`; missing or invalid trusted headers return `403` while access control is enabled. Keep the FinchVox HTTP port private so clients cannot bypass the reverse proxy.
 
+When WAV chunks contain more timeline silence than the recorded wall-clock session, FinchVox shortens only the excess silent runs while combining them. The standard player, audio download, and background Opus compression all use this same combined stream; non-silent samples and short conversational pauses are preserved. New processor recordings include precise elapsed-time metadata, while existing recordings fall back to their stored timestamps and trace duration.
+
 `FINCHVOX_LEGACY_TENANT_SOURCE_MAP` is optional. It maps older `finchvox.session.source` values to a tenant ID for traces created before `finchvox.tenant.id` was added.
 
 ## Usage - Finchvox server

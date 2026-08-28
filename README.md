@@ -80,6 +80,24 @@ The `finchvox.init()` function accepts the following optional parameters:
 
 By default, logs from `pipecat.*`, `finchvox.*`, `__main__`, and any source files in your project directory are captured. Use `log_modules` to include additional third-party modules.
 
+### Tenant-scoped UI access
+
+FinchVox can enforce tenant isolation for its UI and session API when it runs behind a trusted reverse proxy:
+
+```bash
+export FINCHVOX_ACCESS_CONTROL_ENABLED=true
+export FINCHVOX_LEGACY_TENANT_SOURCE_MAP='{"1c":"customer.example"}'
+```
+
+The proxy must remove any client-supplied access headers and set them itself after authentication:
+
+- `X-Finchvox-Role: admin` grants access to every session.
+- `X-Finchvox-Role: tenant` together with `X-Finchvox-Tenant: customer.example` grants access only to sessions whose trace attribute `finchvox.tenant.id` matches that tenant.
+
+Tenant users cannot upload sessions, and direct requests for another tenant's trace, logs, conversation, audio, metrics, environment, or download return `404`. Missing or invalid trusted headers return `403` while access control is enabled. Keep the FinchVox HTTP port private so clients cannot bypass the reverse proxy.
+
+`FINCHVOX_LEGACY_TENANT_SOURCE_MAP` is optional. It maps older `finchvox.session.source` values to a tenant ID for traces created before `finchvox.tenant.id` was added.
+
 ## Usage - Finchvox server
 
 ```bash

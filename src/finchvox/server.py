@@ -27,6 +27,7 @@ from finchvox.collector.log_writer import LogWriter
 from finchvox.collector.audio_handler import AudioHandler
 from finchvox.collector.collector_routes import register_collector_routes
 from finchvox.ui_routes import register_ui_routes
+from finchvox.access_control import AccessControlPolicy
 from finchvox.collector.config import (
     GRPC_PORT,
     MAX_WORKERS,
@@ -95,7 +96,11 @@ class UnifiedServer:
         )
 
         # Register UI routes first (includes static file mounts)
-        register_ui_routes(app, self.data_dir)
+        register_ui_routes(
+            app,
+            self.data_dir,
+            access_control=AccessControlPolicy.from_env(),
+        )
 
         # Register collector routes with /collector prefix
         register_collector_routes(app, self.audio_handler, prefix="/collector")

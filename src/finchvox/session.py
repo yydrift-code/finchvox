@@ -38,6 +38,7 @@ class Session:
         self._max_end_nano: Optional[int] = None
         self._service_name: Optional[str] = None
         self._session_source: Optional[str] = None
+        self._tenant_id: Optional[str] = None
         self._load_metadata()
         self._load_log_count()
 
@@ -67,6 +68,13 @@ class Session:
             return f"{initiator} · {ui_host}"
         return initiator
 
+    def _extract_tenant_id(self, span: dict) -> Optional[str]:
+        attributes = {
+            attr.get("key"): attr.get("value", {}).get("string_value")
+            for attr in span.get("attributes", [])
+        }
+        return attributes.get("finchvox.tenant.id") or attributes.get("leasing.ui_host")
+
     def _update_min_start(self, current: Optional[int], span: dict) -> Optional[int]:
         if "start_time_unix_nano" not in span:
             return current
@@ -90,6 +98,7 @@ class Session:
         max_end = None
         service_name = None
         session_source = None
+        tenant_id = None
 
         try:
             with open(self.trace_file, "r") as f:
@@ -105,6 +114,8 @@ class Session:
                             service_name = self._extract_service_name(span)
                         if session_source is None:
                             session_source = self._extract_session_source(span)
+                        if tenant_id is None:
+                            tenant_id = self._extract_tenant_id(span)
         except Exception as e:
             print(f"Error loading session {self.trace_file}: {e}")
 
@@ -114,6 +125,7 @@ class Session:
         self._max_end_nano = max_end
         self._service_name = service_name
         self._session_source = session_source
+        self._tenant_id = tenant_id
 
     def _load_log_count(self):
         log_file = self.session_dir / f"logs_{self.session_id}.jsonl"
@@ -171,6 +183,10 @@ class Session:
         return self._session_source
 
     @property
+    def tenant_id(self) -> Optional[str]:
+        return self._tenant_id
+
+    @property
     def trace(self) -> Trace:
         return Trace(turn_count=self.turn_count)
 
@@ -201,6 +217,7 @@ class Session:
             "session_id": self.session_id,
             "service_name": self.service_name,
             "session_source": self.session_source,
+            "tenant_id": self.tenant_id,
             "start_time": self.start_time,
             "end_time": self.end_time,
             "duration_ms": self.duration_ms,

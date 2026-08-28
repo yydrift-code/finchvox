@@ -186,3 +186,44 @@ class TestSessionRepository:
         result = SessionRepository(temp_sessions_dir).list_paginated()
 
         assert result.sessions[0]["session_source"] == expected
+
+    def test_tenant_id_is_exposed_in_list_metadata(self, temp_sessions_dir):
+        create_session(
+            temp_sessions_dir,
+            "tenant-session",
+            1000000000000000000,
+            attributes=[
+                {
+                    "key": "finchvox.tenant.id",
+                    "value": {"string_value": "astl.dev.family"},
+                }
+            ],
+        )
+
+        result = SessionRepository(temp_sessions_dir).list_paginated()
+
+        assert result.sessions[0]["tenant_id"] == "astl.dev.family"
+
+    def test_session_filter_applies_before_pagination(self, temp_sessions_dir):
+        for i in range(60):
+            tenant_id = "astl.dev.family" if i % 2 == 0 else "other.example"
+            create_session(
+                temp_sessions_dir,
+                f"session{i:03d}",
+                i * 1000000000000000000,
+                attributes=[
+                    {
+                        "key": "finchvox.tenant.id",
+                        "value": {"string_value": tenant_id},
+                    }
+                ],
+            )
+
+        result = SessionRepository(temp_sessions_dir, page_size=20).list_paginated(
+            page=2,
+            session_filter=lambda session: session.tenant_id == "astl.dev.family",
+        )
+
+        assert result.total_count == 30
+        assert result.total_pages == 2
+        assert len(result.sessions) == 10

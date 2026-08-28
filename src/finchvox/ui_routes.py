@@ -2,12 +2,13 @@ import json
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile
+from fastapi import FastAPI, HTTPException, BackgroundTasks, File, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from finchvox.audio_utils import find_chunks, combine_chunks
+from finchvox.access_control import AccessControlPolicy, AccessScope
 from finchvox.conversation import Conversation
 from finchvox.metrics import Metrics
 from finchvox.session import Session
@@ -72,9 +73,17 @@ def _get_combined_audio_file(
     return tmp_path, "audio/wav", True
 
 
-async def _handle_list_sessions(sessions_base_dir: Path, page: int = 1) -> JSONResponse:
+async def _handle_list_sessions(
+    sessions_base_dir: Path,
+    access_control: AccessControlPolicy,
+    scope: AccessScope,
+    page: int = 1,
+) -> JSONResponse:
     repository = SessionRepository(sessions_base_dir)
-    result = repository.list_paginated(page)
+    result = repository.list_paginated(
+        page,
+        session_filter=lambda session: access_control.can_view(scope, session),
+    )
     return JSONResponse(result.to_dict())
 
 
@@ -204,7 +213,7 @@ async def _handle_get_session_audio_status(
 
     last_modified = None
     if chunks:
-        last_modified = max(Path(c).stat().st_mtime for c in chunks)
+        last_modified = max(chunk_path.stat().st_mtime for _, chunk_path in chunks)
 
     return JSONResponse(
         {
@@ -266,11 +275,26 @@ async def _handle_get_session_environment(
     return JSONResponse(json.loads(env_file.read_text()))
 
 
-def register_ui_routes(app: FastAPI, data_dir: Path = None):
+def register_ui_routes(
+    app: FastAPI,
+    data_dir: Path = None,
+    access_control: AccessControlPolicy | None = None,
+):
     if data_dir is None:
         data_dir = get_default_data_dir()
+    if access_control is None:
+        access_control = AccessControlPolicy()
 
     sessions_base_dir = get_sessions_base_dir(data_dir)
+
+    def get_scope(request: Request) -> AccessScope:
+        return access_control.scope_for_request(request)
+
+    def authorize_session(request: Request, session_id: str) -> Session:
+        scope = get_scope(request)
+        session = _get_session(data_dir, session_id)
+        access_control.require_session_access(scope, session)
+        return session
 
     app.mount("/css", StaticFiles(directory=str(UI_DIR / "css")), name="css")
     app.mount("/js", StaticFiles(directory=str(UI_DIR / "js")), name="js")
@@ -282,58 +306,82 @@ def register_ui_routes(app: FastAPI, data_dir: Path = None):
         return FileResponse(str(UI_DIR / "images" / "favicon.ico"))
 
     @app.get("/")
-    async def index():
+    async def index(request: Request):
+        get_scope(request)
         return FileResponse(str(UI_DIR / "sessions_list.html"))
 
     @app.get("/sessions/{session_id}")
-    async def session_detail_page(session_id: str):
+    async def session_detail_page(request: Request, session_id: str):
+        authorize_session(request, session_id)
         telemetry.send_event("session_view")
         return FileResponse(str(UI_DIR / "session_detail.html"))
 
     @app.get("/api/sessions")
-    async def list_sessions(page: int = 1) -> JSONResponse:
-        return await _handle_list_sessions(sessions_base_dir, page)
+    async def list_sessions(request: Request, page: int = 1) -> JSONResponse:
+        scope = get_scope(request)
+        return await _handle_list_sessions(
+            sessions_base_dir, access_control, scope, page
+        )
 
     @app.get("/api/sessions/{session_id}/trace")
-    async def get_session_trace(session_id: str) -> JSONResponse:
+    async def get_session_trace(request: Request, session_id: str) -> JSONResponse:
+        authorize_session(request, session_id)
         return await _handle_get_session_trace(data_dir, session_id)
 
     @app.get("/api/sessions/{session_id}/raw")
-    async def get_session_raw(session_id: str) -> JSONResponse:
+    async def get_session_raw(request: Request, session_id: str) -> JSONResponse:
+        authorize_session(request, session_id)
         return await _handle_get_session_raw(data_dir, session_id)
 
     @app.get("/api/sessions/{session_id}/logs")
-    async def get_session_logs(session_id: str, limit: int = 1000) -> JSONResponse:
+    async def get_session_logs(
+        request: Request, session_id: str, limit: int = 1000
+    ) -> JSONResponse:
+        authorize_session(request, session_id)
         return await _handle_get_session_logs(data_dir, session_id, limit)
 
     @app.get("/api/sessions/{session_id}/conversation")
-    async def get_session_conversation(session_id: str) -> JSONResponse:
+    async def get_session_conversation(
+        request: Request, session_id: str
+    ) -> JSONResponse:
+        authorize_session(request, session_id)
         return await _handle_get_session_conversation(data_dir, session_id)
 
     @app.get("/api/sessions/{session_id}/exceptions")
-    async def get_session_exceptions(session_id: str) -> JSONResponse:
+    async def get_session_exceptions(request: Request, session_id: str) -> JSONResponse:
+        authorize_session(request, session_id)
         return await _handle_get_session_exceptions(data_dir, session_id)
 
     @app.get("/api/sessions/{session_id}/audio")
-    async def get_session_audio(session_id: str, background_tasks: BackgroundTasks):
+    async def get_session_audio(
+        request: Request, session_id: str, background_tasks: BackgroundTasks
+    ):
+        authorize_session(request, session_id)
         return await _handle_get_session_audio(data_dir, session_id, background_tasks)
 
     @app.get("/api/sessions/{session_id}/audio/status")
-    async def get_session_audio_status(session_id: str) -> JSONResponse:
+    async def get_session_audio_status(
+        request: Request, session_id: str
+    ) -> JSONResponse:
+        authorize_session(request, session_id)
         return await _handle_get_session_audio_status(data_dir, session_id)
 
     @app.get("/api/sessions/{session_id}/metrics")
-    async def get_session_metrics(session_id: str) -> JSONResponse:
+    async def get_session_metrics(request: Request, session_id: str) -> JSONResponse:
+        authorize_session(request, session_id)
         return await _handle_get_session_metrics(data_dir, session_id)
 
     @app.get("/api/sessions/{session_id}/download")
-    async def download_session(session_id: str):
+    async def download_session(request: Request, session_id: str):
+        authorize_session(request, session_id)
         return await _handle_download_session(data_dir, session_id)
 
     @app.post("/api/sessions/upload")
-    async def upload_session(file: UploadFile = File(...)):
+    async def upload_session(request: Request, file: UploadFile = File(...)):
+        access_control.require_admin(get_scope(request))
         return await _handle_upload_session(sessions_base_dir, file)
 
     @app.get("/api/sessions/{session_id}/environment")
-    async def get_session_environment(session_id: str):
+    async def get_session_environment(request: Request, session_id: str):
+        authorize_session(request, session_id)
         return await _handle_get_session_environment(data_dir, session_id)

@@ -1,6 +1,7 @@
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from finchvox.session import Session
 
@@ -36,7 +37,9 @@ class SessionRepository:
         self.sessions_base_dir = sessions_base_dir
         self.page_size = page_size
 
-    def _load_all_sessions(self) -> list[dict]:
+    def _load_all_sessions(
+        self, session_filter: Callable[[Session], bool] | None = None
+    ) -> list[dict]:
         if not self.sessions_base_dir.exists():
             return []
 
@@ -53,6 +56,8 @@ class SessionRepository:
 
             try:
                 session = Session(session_dir)
+                if session_filter is not None and not session_filter(session):
+                    continue
                 sessions.append(session.to_dict())
             except Exception as e:
                 print(f"Error reading session {session_dir}: {e}")
@@ -61,8 +66,12 @@ class SessionRepository:
         sessions.sort(key=lambda s: s.get("start_time") or 0, reverse=True)
         return sessions
 
-    def list_paginated(self, page: int = 1) -> PaginatedSessions:
-        all_sessions = self._load_all_sessions()
+    def list_paginated(
+        self,
+        page: int = 1,
+        session_filter: Callable[[Session], bool] | None = None,
+    ) -> PaginatedSessions:
+        all_sessions = self._load_all_sessions(session_filter=session_filter)
         total_count = len(all_sessions)
         total_pages = max(1, math.ceil(total_count / self.page_size))
 

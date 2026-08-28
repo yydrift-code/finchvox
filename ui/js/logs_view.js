@@ -187,6 +187,7 @@ function logsViewMixin() {
         },
 
         switchView(view) {
+            if (!this.canViewDiagnostics && view !== 'conversation') return;
             this.selectedView = view;
             history.pushState(null, '', `#${view}`);
 

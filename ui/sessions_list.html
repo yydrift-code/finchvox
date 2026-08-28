@@ -32,7 +32,7 @@
     <main class="flex-1 overflow-auto px-8 pb-16">
         <div class="flex items-center justify-between mt-6 mb-4">
             <h1 class="text-white text-xl font-semibold" x-text="showingRangeText"></h1>
-            <button @click="showUploadSection = !showUploadSection"
+            <button x-cloak x-show="canUploadSessions" @click="showUploadSection = !showUploadSection"
                     class="flex items-center gap-2 bg-white/5 text-white/40 border border-white/10 hover:bg-white/10 hover:text-white/60 rounded px-3 py-1.5 text-xs font-mono transition-all duration-200 cursor-pointer"
                     :class="{ 'bg-amber-500/20 text-amber-400 border-amber-500/30': showUploadSection }">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
@@ -42,7 +42,7 @@
             </button>
         </div>
 
-        <div x-show="showUploadSection" x-transition class="px-4 py-4 mb-4 border border-white/10 rounded-lg bg-white/[0.02]">
+        <div x-cloak x-show="canUploadSessions && showUploadSection" x-transition class="px-4 py-4 mb-4 border border-white/10 rounded-lg bg-white/[0.02]">
         <form @submit.prevent="uploadSession" class="flex items-center gap-4">
             <input type="file"
                    accept=".zip"
@@ -83,7 +83,7 @@
                     <th class="py-4 px-6 text-xs font-medium tracking-wide">Duration</th>
                     <th class="py-4 px-6 text-xs font-medium tracking-wide">Audio</th>
                     <th class="py-4 px-6 text-xs font-medium tracking-wide">Turns</th>
-                    <th class="py-4 px-6 text-xs font-medium tracking-wide">Logs</th>
+                    <th x-cloak x-show="canViewDiagnostics" class="py-4 px-6 text-xs font-medium tracking-wide">Logs</th>
                     <th class="py-4 px-6 text-xs font-medium tracking-wide"></th>
                 </tr>
             </thead>
@@ -99,7 +99,7 @@
                         <td class="py-4 px-6 text-white/70 text-sm" x-text="formatDuration(session.duration_ms)"></td>
                         <td class="py-4 px-6 text-white/70 text-sm" x-text="session.audio_size_mb !== null ? session.audio_size_mb + ' MB' : '—'"></td>
                         <td class="py-4 px-6 text-white/70 text-sm" x-text="session.trace.turn_count > 0 ? formatCount(session.trace.turn_count) : '—'"></td>
-                        <td class="py-4 px-6 text-white/70 text-sm" x-text="formatCount(session.log_count)"></td>
+                        <td x-cloak x-show="canViewDiagnostics" class="py-4 px-6 text-white/70 text-sm" x-text="formatCount(session.log_count)"></td>
                         <td class="py-4 px-6 text-white/70 text-sm">
 
                         </td>

@@ -84,7 +84,13 @@ async def _handle_list_sessions(
         page,
         session_filter=lambda session: access_control.can_view(scope, session),
     )
-    return JSONResponse(result.to_dict())
+    payload = result.to_dict()
+    if not scope.can_view_diagnostics:
+        payload["data_dir"] = ""
+        for session in payload["sessions"]:
+            session.pop("log_count", None)
+            session.pop("tenant_id", None)
+    return JSONResponse(payload)
 
 
 def _get_session(data_dir: Path, session_id: str) -> Session:
@@ -162,9 +168,16 @@ async def _handle_get_session_logs(
 async def _handle_get_session_conversation(
     data_dir: Path, session_id: str
 ) -> JSONResponse:
-    spans = _get_session_spans(data_dir, session_id)
+    session = _get_session(data_dir, session_id)
+    spans = session.get_spans()
     conversation = Conversation(spans)
-    return JSONResponse({"messages": conversation.to_dict_list()})
+    return JSONResponse(
+        {
+            "messages": conversation.to_dict_list(),
+            "trace_start_time": session.start_time_nano,
+            "service_name": session.service_name,
+        }
+    )
 
 
 async def _handle_get_session_audio(
@@ -296,6 +309,11 @@ def register_ui_routes(
         access_control.require_session_access(scope, session)
         return session
 
+    def authorize_diagnostics(request: Request, session_id: str) -> Session:
+        session = authorize_session(request, session_id)
+        access_control.require_diagnostics_access(get_scope(request))
+        return session
+
     app.mount("/css", StaticFiles(directory=str(UI_DIR / "css")), name="css")
     app.mount("/js", StaticFiles(directory=str(UI_DIR / "js")), name="js")
     app.mount("/lib", StaticFiles(directory=str(UI_DIR / "lib")), name="lib")
@@ -309,6 +327,10 @@ def register_ui_routes(
     async def index(request: Request):
         get_scope(request)
         return FileResponse(str(UI_DIR / "sessions_list.html"))
+
+    @app.get("/api/access")
+    async def get_access(request: Request) -> JSONResponse:
+        return JSONResponse(get_scope(request).to_dict())
 
     @app.get("/sessions/{session_id}")
     async def session_detail_page(request: Request, session_id: str):
@@ -325,19 +347,19 @@ def register_ui_routes(
 
     @app.get("/api/sessions/{session_id}/trace")
     async def get_session_trace(request: Request, session_id: str) -> JSONResponse:
-        authorize_session(request, session_id)
+        authorize_diagnostics(request, session_id)
         return await _handle_get_session_trace(data_dir, session_id)
 
     @app.get("/api/sessions/{session_id}/raw")
     async def get_session_raw(request: Request, session_id: str) -> JSONResponse:
-        authorize_session(request, session_id)
+        authorize_diagnostics(request, session_id)
         return await _handle_get_session_raw(data_dir, session_id)
 
     @app.get("/api/sessions/{session_id}/logs")
     async def get_session_logs(
         request: Request, session_id: str, limit: int = 1000
     ) -> JSONResponse:
-        authorize_session(request, session_id)
+        authorize_diagnostics(request, session_id)
         return await _handle_get_session_logs(data_dir, session_id, limit)
 
     @app.get("/api/sessions/{session_id}/conversation")
@@ -349,7 +371,7 @@ def register_ui_routes(
 
     @app.get("/api/sessions/{session_id}/exceptions")
     async def get_session_exceptions(request: Request, session_id: str) -> JSONResponse:
-        authorize_session(request, session_id)
+        authorize_diagnostics(request, session_id)
         return await _handle_get_session_exceptions(data_dir, session_id)
 
     @app.get("/api/sessions/{session_id}/audio")
@@ -366,14 +388,26 @@ def register_ui_routes(
         authorize_session(request, session_id)
         return await _handle_get_session_audio_status(data_dir, session_id)
 
+    @app.get("/api/sessions/{session_id}/audio/download")
+    async def download_session_audio(
+        request: Request, session_id: str, background_tasks: BackgroundTasks
+    ):
+        authorize_session(request, session_id)
+        return await _handle_get_session_audio(
+            data_dir,
+            session_id,
+            background_tasks,
+            as_download=True,
+        )
+
     @app.get("/api/sessions/{session_id}/metrics")
     async def get_session_metrics(request: Request, session_id: str) -> JSONResponse:
-        authorize_session(request, session_id)
+        authorize_diagnostics(request, session_id)
         return await _handle_get_session_metrics(data_dir, session_id)
 
     @app.get("/api/sessions/{session_id}/download")
     async def download_session(request: Request, session_id: str):
-        authorize_session(request, session_id)
+        authorize_diagnostics(request, session_id)
         return await _handle_download_session(data_dir, session_id)
 
     @app.post("/api/sessions/upload")
@@ -383,5 +417,5 @@ def register_ui_routes(
 
     @app.get("/api/sessions/{session_id}/environment")
     async def get_session_environment(request: Request, session_id: str):
-        authorize_session(request, session_id)
+        authorize_diagnostics(request, session_id)
         return await _handle_get_session_environment(data_dir, session_id)

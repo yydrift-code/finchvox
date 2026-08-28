@@ -10,6 +10,8 @@ function sessionDetailApp() {
         selectedSpan: null,      // Span shown in the details panel
         highlightedSpan: null,   // Span highlighted in the waterfall (for keyboard navigation)
         isPanelOpen: false,
+        canViewDiagnostics: false,
+        accessLoaded: false,
 
         spanCopied: false,
 
@@ -53,12 +55,18 @@ function sessionDetailApp() {
                 return;
             }
 
-            this.initLogsView();
-            this.initTracePanelSizing();
-            await this.loadTraceData();
-            this.loadLogsIfNeeded();
+            await this.loadAccess();
+            if (this.canViewDiagnostics) {
+                this.initLogsView();
+                this.initTracePanelSizing();
+                await this.loadTraceData();
+                this.loadLogsIfNeeded();
+                this.loadMetricsIfNeeded();
+            } else {
+                this.selectedView = 'conversation';
+                history.replaceState(null, '', '#conversation');
+            }
             this.loadConversationIfNeeded();
-            this.loadMetricsIfNeeded();
 
             // Disabled: Real-time polling not currently supported for logs
             // const conversationSpan = this.spans.find(s => s.name === 'conversation');
@@ -77,6 +85,20 @@ function sessionDetailApp() {
             const spanId = hashParams.get('span');
             if (spanId && this.selectedView === 'trace') {
                 this.selectSpanById(spanId);
+            }
+        },
+
+        async loadAccess() {
+            try {
+                const response = await fetch('/api/access');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const access = await response.json();
+                this.canViewDiagnostics = access.can_view_diagnostics === true;
+            } catch (error) {
+                console.error('Failed to load access capabilities:', error);
+                this.canViewDiagnostics = false;
+            } finally {
+                this.accessLoaded = true;
             }
         },
 

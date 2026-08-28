@@ -14,6 +14,12 @@ function conversationViewMixin() {
 
                 const data = await response.json();
                 this.conversationMessages = data.messages;
+                if (data.trace_start_time) {
+                    this.minTime = Number(data.trace_start_time) / 1_000_000;
+                }
+                if (data.service_name) {
+                    this.serviceName = data.service_name;
+                }
             } catch (error) {
                 console.error('Failed to load conversation:', error);
                 this.conversationError = error.message;

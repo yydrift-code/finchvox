@@ -94,7 +94,7 @@ The proxy must remove any client-supplied access headers and set them itself aft
 - `X-Finchvox-Role: admin` grants access to every session.
 - `X-Finchvox-Role: tenant` together with `X-Finchvox-Tenant: customer.example` grants access only to sessions whose trace attribute `finchvox.tenant.id` matches that tenant.
 
-Tenant users cannot upload sessions, and direct requests for another tenant's trace, logs, conversation, audio, metrics, environment, or download return `404`. Missing or invalid trusted headers return `403` while access control is enabled. Keep the FinchVox HTTP port private so clients cannot bypass the reverse proxy.
+Tenant users get a conversation-only session view with audio playback and audio-file downloads. Trace, logs, metrics, exceptions, raw data, environment data, full-session downloads, and uploads remain admin-only, including their direct API routes. Requests for another tenant's session return `404`; missing or invalid trusted headers return `403` while access control is enabled. Keep the FinchVox HTTP port private so clients cannot bypass the reverse proxy.
 
 `FINCHVOX_LEGACY_TENANT_SOURCE_MAP` is optional. It maps older `finchvox.session.source` values to a tenant ID for traces created before `finchvox.tenant.id` was added.
 

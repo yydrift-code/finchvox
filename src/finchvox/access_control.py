@@ -36,6 +36,18 @@ class AccessScope:
     def is_admin(self) -> bool:
         return self.role == "admin"
 
+    @property
+    def can_view_diagnostics(self) -> bool:
+        return self.is_admin
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "role": self.role,
+            "tenant_id": self.tenant_id,
+            "can_view_diagnostics": self.can_view_diagnostics,
+            "can_upload_sessions": self.is_admin,
+        }
+
 
 @dataclass(frozen=True)
 class AccessControlPolicy:
@@ -107,3 +119,9 @@ class AccessControlPolicy:
     def require_admin(self, scope: AccessScope) -> None:
         if not scope.is_admin:
             raise HTTPException(status_code=403, detail="Administrator access required")
+
+    def require_diagnostics_access(self, scope: AccessScope) -> None:
+        if not scope.can_view_diagnostics:
+            raise HTTPException(
+                status_code=403, detail="Diagnostic access is restricted"
+            )

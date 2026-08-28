@@ -14,6 +14,8 @@ function sessionsListApp() {
         hasPreviousPage: false,
         hasNextPage: false,
         loading: false,
+        canUploadSessions: false,
+        canViewDiagnostics: false,
 
         initialized: false,
         requestToken: 0,
@@ -21,7 +23,22 @@ function sessionsListApp() {
         async init() {
             if (this.initialized) return;
             this.initialized = true;
+            await this.loadAccess();
             await this.loadSessions();
+        },
+
+        async loadAccess() {
+            try {
+                const response = await fetch('/api/access');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const access = await response.json();
+                this.canUploadSessions = access.can_upload_sessions === true;
+                this.canViewDiagnostics = access.can_view_diagnostics === true;
+            } catch (error) {
+                console.error('Failed to load access capabilities:', error);
+                this.canUploadSessions = false;
+                this.canViewDiagnostics = false;
+            }
         },
 
         applySessionData(data) {

@@ -51,6 +51,9 @@ def _create_session(
 @pytest.fixture
 def access_client(temp_data_dir):
     _create_session(temp_data_dir, "astl-session", tenant_id="astl.dev.family")
+    (temp_data_dir / "sessions" / "astl-session" / "audio.wav").write_bytes(
+        b"RIFF-test-audio"
+    )
     _create_session(temp_data_dir, "owner-session", tenant_id="leasing.yytech.by")
     _create_session(temp_data_dir, "unknown-session")
 
@@ -86,6 +89,9 @@ def test_admin_sees_all_sessions(access_client):
         "owner-session",
         "unknown-session",
     }
+    assert "log_count" in response.json()["sessions"][0]
+    assert "tenant_id" in response.json()["sessions"][0]
+    assert response.json()["data_dir"]
 
 
 def test_tenant_list_contains_only_matching_sessions(access_client):
@@ -96,6 +102,39 @@ def test_tenant_list_contains_only_matching_sessions(access_client):
     assert [session["session_id"] for session in response.json()["sessions"]] == [
         "astl-session"
     ]
+    assert "log_count" not in response.json()["sessions"][0]
+    assert "tenant_id" not in response.json()["sessions"][0]
+    assert response.json()["data_dir"] == ""
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        (
+            ADMIN_HEADERS,
+            {
+                "role": "admin",
+                "tenant_id": None,
+                "can_view_diagnostics": True,
+                "can_upload_sessions": True,
+            },
+        ),
+        (
+            ASTL_HEADERS,
+            {
+                "role": "tenant",
+                "tenant_id": "astl.dev.family",
+                "can_view_diagnostics": False,
+                "can_upload_sessions": False,
+            },
+        ),
+    ],
+)
+def test_access_endpoint_exposes_ui_capabilities(access_client, headers, expected):
+    response = access_client.get("/api/access", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == expected
 
 
 @pytest.mark.parametrize(
@@ -109,6 +148,7 @@ def test_tenant_list_contains_only_matching_sessions(access_client):
         "/api/sessions/owner-session/exceptions",
         "/api/sessions/owner-session/audio",
         "/api/sessions/owner-session/audio/status",
+        "/api/sessions/owner-session/audio/download",
         "/api/sessions/owner-session/metrics",
         "/api/sessions/owner-session/download",
         "/api/sessions/owner-session/environment",
@@ -121,9 +161,52 @@ def test_tenant_cannot_open_another_tenants_session(access_client, path):
     assert response.json()["detail"] == "Session not found"
 
 
-def test_tenant_can_open_own_session(access_client):
+def test_tenant_can_open_own_conversation_and_audio_status(access_client):
     response = access_client.get(
-        "/api/sessions/astl-session/trace", headers=ASTL_HEADERS
+        "/api/sessions/astl-session/conversation", headers=ASTL_HEADERS
+    )
+
+    assert response.status_code == 200
+    assert response.json()["messages"] == []
+    assert response.json()["trace_start_time"] == 1_000_000_000
+
+    audio_status = access_client.get(
+        "/api/sessions/astl-session/audio/status", headers=ASTL_HEADERS
+    )
+    assert audio_status.status_code == 200
+
+    audio_download = access_client.get(
+        "/api/sessions/astl-session/audio/download", headers=ASTL_HEADERS
+    )
+    assert audio_download.status_code == 200
+    assert audio_download.headers["content-type"] == "audio/wav"
+    assert "attachment" in audio_download.headers["content-disposition"]
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "trace",
+        "raw",
+        "logs",
+        "exceptions",
+        "metrics",
+        "download",
+        "environment",
+    ],
+)
+def test_tenant_cannot_open_own_diagnostics(access_client, suffix):
+    response = access_client.get(
+        f"/api/sessions/astl-session/{suffix}", headers=ASTL_HEADERS
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Diagnostic access is restricted"
+
+
+def test_admin_can_open_diagnostics(access_client):
+    response = access_client.get(
+        "/api/sessions/owner-session/trace", headers=ADMIN_HEADERS
     )
 
     assert response.status_code == 200
@@ -182,6 +265,18 @@ def test_disabled_access_control_preserves_standalone_behavior(temp_data_dir):
 
     assert client.get("/api/sessions").status_code == 200
     assert client.get("/api/sessions").json()["total_count"] == 1
+    assert client.get("/api/access").json()["can_view_diagnostics"] is True
+
+
+def test_tenant_ui_hides_diagnostics_and_defaults_to_conversation():
+    ui_dir = Path(__file__).parents[1] / "ui"
+    detail_html = (ui_dir / "session_detail.html").read_text()
+    detail_js = (ui_dir / "js" / "session_detail.js").read_text()
+    sessions_html = (ui_dir / "sessions_list.html").read_text()
+
+    assert 'x-show="canViewDiagnostics"' in detail_html
+    assert "this.selectedView = 'conversation'" in detail_js
+    assert 'x-show="canUploadSessions"' in sessions_html
 
 
 def test_access_control_policy_loads_from_environment(monkeypatch):

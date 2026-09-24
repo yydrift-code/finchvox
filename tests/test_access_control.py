@@ -30,6 +30,7 @@ def _create_session(
     *,
     tenant_id: str | None = None,
     source: str | None = None,
+    service_name: str | None = None,
 ) -> None:
     session_dir = data_dir / "sessions" / session_id
     session_dir.mkdir(parents=True)
@@ -45,6 +46,8 @@ def _create_session(
         "end_time_unix_nano": 2_000_000_000,
         "attributes": attributes,
     }
+    if service_name:
+        span["resource"] = {"attributes": [_attribute("service.name", service_name)]}
     (session_dir / f"trace_{session_id}.jsonl").write_text(json.dumps(span) + "\n")
 
 
@@ -244,6 +247,63 @@ def test_legacy_source_mapping_assigns_tenant(temp_data_dir):
     ]
 
 
+def test_legacy_service_mapping_assigns_only_unowned_sessions(temp_data_dir):
+    _create_session(
+        temp_data_dir,
+        "runpod",
+        source="unknown",
+        service_name="leasing-runpod-manual",
+    )
+    _create_session(
+        temp_data_dir,
+        "selectel",
+        source="unknown",
+        service_name="leasing-selectel-manual",
+    )
+    _create_session(
+        temp_data_dir,
+        "owner",
+        tenant_id="leasing.yytech.by",
+        service_name="leasing-runpod-manual",
+    )
+    _create_session(temp_data_dir, "unrelated", service_name="leasing-agent")
+    app = FastAPI()
+    register_ui_routes(
+        app,
+        temp_data_dir,
+        access_control=AccessControlPolicy(
+            enabled=True,
+            legacy_tenant_service_map={
+                "leasing-runpod-manual": "astl.dev.family",
+                "leasing-selectel-manual": "astl.dev.family",
+            },
+        ),
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/sessions", headers=ASTL_HEADERS)
+
+    assert response.status_code == 200
+    assert {session["session_id"] for session in response.json()["sessions"]} == {
+        "runpod",
+        "selectel",
+    }
+    assert (
+        client.get(
+            "/api/sessions/runpod/conversation", headers=ASTL_HEADERS
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get("/api/sessions/owner/conversation", headers=ASTL_HEADERS).status_code
+        == 404
+    )
+    assert (
+        client.get("/api/sessions/runpod/trace", headers=ASTL_HEADERS).status_code
+        == 403
+    )
+
+
 def test_tenant_id_header_is_case_insensitive(access_client):
     response = access_client.get(
         "/api/sessions",
@@ -285,8 +345,15 @@ def test_access_control_policy_loads_from_environment(monkeypatch):
         "FINCHVOX_LEGACY_TENANT_SOURCE_MAP",
         '{"1c": "ASTL.DEV.FAMILY"}',
     )
+    monkeypatch.setenv(
+        "FINCHVOX_LEGACY_TENANT_SERVICE_MAP",
+        '{"leasing-runpod-manual": "ASTL.DEV.FAMILY"}',
+    )
 
     policy = AccessControlPolicy.from_env()
 
     assert policy.enabled is True
     assert policy.legacy_tenant_source_map == {"1c": "astl.dev.family"}
+    assert policy.legacy_tenant_service_map == {
+        "leasing-runpod-manual": "astl.dev.family"
+    }

@@ -53,36 +53,41 @@ class AccessScope:
 class AccessControlPolicy:
     enabled: bool = False
     legacy_tenant_source_map: dict[str, str] = field(default_factory=dict)
+    legacy_tenant_service_map: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls) -> "AccessControlPolicy":
         enabled = _is_enabled(os.environ.get("FINCHVOX_ACCESS_CONTROL_ENABLED"))
         raw_source_map = os.environ.get("FINCHVOX_LEGACY_TENANT_SOURCE_MAP", "{}")
+        raw_service_map = os.environ.get("FINCHVOX_LEGACY_TENANT_SERVICE_MAP", "{}")
 
-        try:
-            parsed_source_map = json.loads(raw_source_map)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                "FINCHVOX_LEGACY_TENANT_SOURCE_MAP must be a JSON object"
-            ) from exc
+        def parse_tenant_map(raw: str, name: str) -> dict[str, str]:
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{name} must be a JSON object") from exc
+            if not isinstance(parsed, dict):
+                raise ValueError(f"{name} must be a JSON object")
 
-        if not isinstance(parsed_source_map, dict):
-            raise ValueError("FINCHVOX_LEGACY_TENANT_SOURCE_MAP must be a JSON object")
+            result = {}
+            for key, tenant_id in parsed.items():
+                if not isinstance(key, str) or not isinstance(tenant_id, str):
+                    raise ValueError(f"{name} keys and values must be strings")
+                normalized_tenant_id = normalize_tenant_id(tenant_id)
+                if normalized_tenant_id is None:
+                    raise ValueError(f"Invalid tenant ID in {name}: {tenant_id}")
+                result[key] = normalized_tenant_id
+            return result
 
-        source_map = {}
-        for source, tenant_id in parsed_source_map.items():
-            if not isinstance(source, str) or not isinstance(tenant_id, str):
-                raise ValueError(
-                    "FINCHVOX_LEGACY_TENANT_SOURCE_MAP keys and values must be strings"
-                )
-            normalized_tenant_id = normalize_tenant_id(tenant_id)
-            if normalized_tenant_id is None:
-                raise ValueError(
-                    f"Invalid tenant ID in FINCHVOX_LEGACY_TENANT_SOURCE_MAP: {tenant_id}"
-                )
-            source_map[source] = normalized_tenant_id
-
-        return cls(enabled=enabled, legacy_tenant_source_map=source_map)
+        return cls(
+            enabled=enabled,
+            legacy_tenant_source_map=parse_tenant_map(
+                raw_source_map, "FINCHVOX_LEGACY_TENANT_SOURCE_MAP"
+            ),
+            legacy_tenant_service_map=parse_tenant_map(
+                raw_service_map, "FINCHVOX_LEGACY_TENANT_SERVICE_MAP"
+            ),
+        )
 
     def scope_for_request(self, request: Request) -> AccessScope:
         if not self.enabled:
@@ -103,7 +108,11 @@ class AccessControlPolicy:
         if session.tenant_id:
             return normalize_tenant_id(session.tenant_id)
         if session.session_source:
-            return self.legacy_tenant_source_map.get(session.session_source)
+            mapped = self.legacy_tenant_source_map.get(session.session_source)
+            if mapped:
+                return mapped
+        if session.service_name:
+            return self.legacy_tenant_service_map.get(session.service_name)
         return None
 
     def can_view(self, scope: AccessScope, session: Session) -> bool:

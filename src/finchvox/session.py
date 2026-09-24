@@ -183,8 +183,13 @@ class Session:
         return self._session_source
 
     @property
-    def tenant_id(self) -> Optional[str]:
+    def explicit_tenant_id(self) -> Optional[str]:
         return self._tenant_id
+
+    @property
+    def tenant_id(self) -> str:
+        """Use the service name as owner when the trace has no tenant override."""
+        return self._tenant_id or self.service_name or "unknown"
 
     @property
     def trace(self) -> Trace:

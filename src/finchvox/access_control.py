@@ -53,11 +53,13 @@ class AccessScope:
 class AccessControlPolicy:
     enabled: bool = False
     legacy_tenant_source_map: dict[str, str] = field(default_factory=dict)
+    tenant_excluded_owners: dict[str, frozenset[str]] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls) -> "AccessControlPolicy":
         enabled = _is_enabled(os.environ.get("FINCHVOX_ACCESS_CONTROL_ENABLED"))
         raw_source_map = os.environ.get("FINCHVOX_LEGACY_TENANT_SOURCE_MAP", "{}")
+        raw_excluded_owners = os.environ.get("FINCHVOX_TENANT_EXCLUDED_OWNERS", "{}")
 
         try:
             parsed_source_map = json.loads(raw_source_map)
@@ -82,7 +84,35 @@ class AccessControlPolicy:
                 )
             source_map[source] = normalized_tenant_id
 
-        return cls(enabled=enabled, legacy_tenant_source_map=source_map)
+        try:
+            parsed_excluded_owners = json.loads(raw_excluded_owners)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "FINCHVOX_TENANT_EXCLUDED_OWNERS must be a JSON object"
+            ) from exc
+        if not isinstance(parsed_excluded_owners, dict):
+            raise ValueError("FINCHVOX_TENANT_EXCLUDED_OWNERS must be a JSON object")
+
+        excluded_owners = {}
+        for tenant_id, owners in parsed_excluded_owners.items():
+            normalized_tenant_id = (
+                normalize_tenant_id(tenant_id) if isinstance(tenant_id, str) else None
+            )
+            if (
+                normalized_tenant_id is None
+                or not isinstance(owners, list)
+                or any(not isinstance(owner, str) or not owner for owner in owners)
+            ):
+                raise ValueError("FINCHVOX_TENANT_EXCLUDED_OWNERS has invalid entries")
+            excluded_owners[normalized_tenant_id] = frozenset(
+                owner.strip().lower() for owner in owners
+            )
+
+        return cls(
+            enabled=enabled,
+            legacy_tenant_source_map=source_map,
+            tenant_excluded_owners=excluded_owners,
+        )
 
     def scope_for_request(self, request: Request) -> AccessScope:
         if not self.enabled:
@@ -99,17 +129,23 @@ class AccessControlPolicy:
 
         raise HTTPException(status_code=403, detail="FinchVox access scope is invalid")
 
-    def tenant_for_session(self, session: Session) -> str | None:
-        if session.tenant_id:
-            return normalize_tenant_id(session.tenant_id)
+    def tenant_for_session(self, session: Session) -> str:
+        if session.explicit_tenant_id:
+            return normalize_tenant_id(session.explicit_tenant_id) or "unknown"
         if session.session_source:
-            return self.legacy_tenant_source_map.get(session.session_source)
-        return None
+            mapped = self.legacy_tenant_source_map.get(session.session_source)
+            if mapped:
+                return mapped
+        return session.tenant_id
 
     def can_view(self, scope: AccessScope, session: Session) -> bool:
         if scope.is_admin:
             return True
-        return self.tenant_for_session(session) == scope.tenant_id
+        owner = self.tenant_for_session(session)
+        excluded = self.tenant_excluded_owners.get(scope.tenant_id)
+        if excluded is not None:
+            return owner.lower() not in excluded
+        return owner == scope.tenant_id
 
     def require_session_access(self, scope: AccessScope, session: Session) -> None:
         if not self.can_view(scope, session):

@@ -30,6 +30,7 @@ def _create_session(
     *,
     tenant_id: str | None = None,
     source: str | None = None,
+    service_name: str | None = None,
 ) -> None:
     session_dir = data_dir / "sessions" / session_id
     session_dir.mkdir(parents=True)
@@ -45,6 +46,8 @@ def _create_session(
         "end_time_unix_nano": 2_000_000_000,
         "attributes": attributes,
     }
+    if service_name:
+        span["resource"] = {"attributes": [_attribute("service.name", service_name)]}
     (session_dir / f"trace_{session_id}.jsonl").write_text(json.dumps(span) + "\n")
 
 
@@ -224,7 +227,9 @@ def test_tenant_cannot_upload_sessions(access_client):
 
 
 def test_legacy_source_mapping_assigns_tenant(temp_data_dir):
-    _create_session(temp_data_dir, "legacy-1c", source="1c")
+    _create_session(
+        temp_data_dir, "legacy-1c", source="1c", service_name="leasing-agent"
+    )
     app = FastAPI()
     register_ui_routes(
         app,
@@ -242,6 +247,72 @@ def test_legacy_source_mapping_assigns_tenant(temp_data_dir):
     assert [session["session_id"] for session in response.json()["sessions"]] == [
         "legacy-1c"
     ]
+
+
+def test_tenant_exclusion_shows_all_other_owners(temp_data_dir):
+    _create_session(temp_data_dir, "runpod", service_name="leasing-runpod-manual")
+    _create_session(temp_data_dir, "selectel", service_name="leasing-selectel-manual")
+    _create_session(temp_data_dir, "old", service_name="leasing-agent")
+    _create_session(temp_data_dir, "other", service_name="other-service")
+    _create_session(temp_data_dir, "unknown")
+    _create_session(
+        temp_data_dir,
+        "owner",
+        tenant_id="leasing.yytech.by",
+        service_name="leasing-agent",
+    )
+    _create_session(temp_data_dir, "owner-service", service_name="leasing.yytech.by")
+    app = FastAPI()
+    register_ui_routes(
+        app,
+        temp_data_dir,
+        access_control=AccessControlPolicy(
+            enabled=True,
+            tenant_excluded_owners={
+                "astl.dev.family": frozenset({"leasing.yytech.by"})
+            },
+        ),
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/sessions", headers=ASTL_HEADERS)
+
+    assert response.status_code == 200
+    assert {session["session_id"] for session in response.json()["sessions"]} == {
+        "runpod",
+        "selectel",
+        "old",
+        "other",
+        "unknown",
+    }
+    assert (
+        client.get(
+            "/api/sessions/runpod/conversation", headers=ASTL_HEADERS
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get("/api/sessions/runpod/trace", headers=ASTL_HEADERS).status_code
+        == 403
+    )
+    assert (
+        client.get("/api/sessions/owner/conversation", headers=ASTL_HEADERS).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            "/api/sessions/owner-service/conversation", headers=ASTL_HEADERS
+        ).status_code
+        == 404
+    )
+    admin = client.get("/api/sessions", headers=ADMIN_HEADERS)
+    owners = {
+        session["session_id"]: session["tenant_id"]
+        for session in admin.json()["sessions"]
+    }
+    assert owners["runpod"] == "leasing-runpod-manual"
+    assert owners["unknown"] == "unknown"
+    assert owners["owner"] == "leasing.yytech.by"
 
 
 def test_tenant_id_header_is_case_insensitive(access_client):
@@ -285,8 +356,15 @@ def test_access_control_policy_loads_from_environment(monkeypatch):
         "FINCHVOX_LEGACY_TENANT_SOURCE_MAP",
         '{"1c": "ASTL.DEV.FAMILY"}',
     )
+    monkeypatch.setenv(
+        "FINCHVOX_TENANT_EXCLUDED_OWNERS",
+        '{"ASTL.DEV.FAMILY": ["leasing.yytech.by"]}',
+    )
 
     policy = AccessControlPolicy.from_env()
 
     assert policy.enabled is True
     assert policy.legacy_tenant_source_map == {"1c": "astl.dev.family"}
+    assert policy.tenant_excluded_owners == {
+        "astl.dev.family": frozenset({"leasing.yytech.by"})
+    }

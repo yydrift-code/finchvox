@@ -54,12 +54,18 @@ class AccessControlPolicy:
     enabled: bool = False
     legacy_tenant_source_map: dict[str, str] = field(default_factory=dict)
     legacy_tenant_service_map: dict[str, str] = field(default_factory=dict)
+    legacy_tenant_service_contains_map: dict[str, str] = field(default_factory=dict)
+    legacy_tenant_service_excludes: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "AccessControlPolicy":
         enabled = _is_enabled(os.environ.get("FINCHVOX_ACCESS_CONTROL_ENABLED"))
         raw_source_map = os.environ.get("FINCHVOX_LEGACY_TENANT_SOURCE_MAP", "{}")
         raw_service_map = os.environ.get("FINCHVOX_LEGACY_TENANT_SERVICE_MAP", "{}")
+        raw_contains_map = os.environ.get(
+            "FINCHVOX_LEGACY_TENANT_SERVICE_CONTAINS_MAP", "{}"
+        )
+        raw_excludes = os.environ.get("FINCHVOX_LEGACY_TENANT_SERVICE_EXCLUDES", "[]")
 
         def parse_tenant_map(raw: str, name: str) -> dict[str, str]:
             try:
@@ -71,13 +77,30 @@ class AccessControlPolicy:
 
             result = {}
             for key, tenant_id in parsed.items():
-                if not isinstance(key, str) or not isinstance(tenant_id, str):
+                if (
+                    not isinstance(key, str)
+                    or not key
+                    or not isinstance(tenant_id, str)
+                ):
                     raise ValueError(f"{name} keys and values must be strings")
                 normalized_tenant_id = normalize_tenant_id(tenant_id)
                 if normalized_tenant_id is None:
                     raise ValueError(f"Invalid tenant ID in {name}: {tenant_id}")
                 result[key] = normalized_tenant_id
             return result
+
+        try:
+            parsed_excludes = json.loads(raw_excludes)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "FINCHVOX_LEGACY_TENANT_SERVICE_EXCLUDES must be a JSON array"
+            ) from exc
+        if not isinstance(parsed_excludes, list) or any(
+            not isinstance(value, str) or not value for value in parsed_excludes
+        ):
+            raise ValueError(
+                "FINCHVOX_LEGACY_TENANT_SERVICE_EXCLUDES must be an array of nonempty strings"
+            )
 
         return cls(
             enabled=enabled,
@@ -86,6 +109,12 @@ class AccessControlPolicy:
             ),
             legacy_tenant_service_map=parse_tenant_map(
                 raw_service_map, "FINCHVOX_LEGACY_TENANT_SERVICE_MAP"
+            ),
+            legacy_tenant_service_contains_map=parse_tenant_map(
+                raw_contains_map, "FINCHVOX_LEGACY_TENANT_SERVICE_CONTAINS_MAP"
+            ),
+            legacy_tenant_service_excludes=tuple(
+                value.lower() for value in parsed_excludes
             ),
         )
 
@@ -112,7 +141,20 @@ class AccessControlPolicy:
             if mapped:
                 return mapped
         if session.service_name:
-            return self.legacy_tenant_service_map.get(session.service_name)
+            mapped = self.legacy_tenant_service_map.get(session.service_name)
+            if mapped:
+                return mapped
+            service_name = session.service_name.lower()
+            if not any(
+                excluded in service_name
+                for excluded in self.legacy_tenant_service_excludes
+            ):
+                for (
+                    substring,
+                    tenant_id,
+                ) in self.legacy_tenant_service_contains_map.items():
+                    if substring.lower() in service_name:
+                        return tenant_id
         return None
 
     def can_view(self, scope: AccessScope, session: Session) -> bool:

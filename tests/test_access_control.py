@@ -266,17 +266,17 @@ def test_legacy_service_mapping_assigns_only_unowned_sessions(temp_data_dir):
         tenant_id="leasing.yytech.by",
         service_name="leasing-runpod-manual",
     )
-    _create_session(temp_data_dir, "unrelated", service_name="leasing-agent")
+    _create_session(temp_data_dir, "old-leasing", service_name="leasing-agent")
+    _create_session(temp_data_dir, "excluded", service_name="leasing.yytech.by")
+    _create_session(temp_data_dir, "unrelated", service_name="other-agent")
     app = FastAPI()
     register_ui_routes(
         app,
         temp_data_dir,
         access_control=AccessControlPolicy(
             enabled=True,
-            legacy_tenant_service_map={
-                "leasing-runpod-manual": "astl.dev.family",
-                "leasing-selectel-manual": "astl.dev.family",
-            },
+            legacy_tenant_service_contains_map={"leasing": "astl.dev.family"},
+            legacy_tenant_service_excludes=("yytech.by",),
         ),
     )
     client = TestClient(app)
@@ -287,6 +287,7 @@ def test_legacy_service_mapping_assigns_only_unowned_sessions(temp_data_dir):
     assert {session["session_id"] for session in response.json()["sessions"]} == {
         "runpod",
         "selectel",
+        "old-leasing",
     }
     assert (
         client.get(
@@ -296,6 +297,12 @@ def test_legacy_service_mapping_assigns_only_unowned_sessions(temp_data_dir):
     )
     assert (
         client.get("/api/sessions/owner/conversation", headers=ASTL_HEADERS).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            "/api/sessions/excluded/conversation", headers=ASTL_HEADERS
+        ).status_code
         == 404
     )
     assert (
@@ -349,6 +356,11 @@ def test_access_control_policy_loads_from_environment(monkeypatch):
         "FINCHVOX_LEGACY_TENANT_SERVICE_MAP",
         '{"leasing-runpod-manual": "ASTL.DEV.FAMILY"}',
     )
+    monkeypatch.setenv(
+        "FINCHVOX_LEGACY_TENANT_SERVICE_CONTAINS_MAP",
+        '{"leasing": "ASTL.DEV.FAMILY"}',
+    )
+    monkeypatch.setenv("FINCHVOX_LEGACY_TENANT_SERVICE_EXCLUDES", '["yytech.by"]')
 
     policy = AccessControlPolicy.from_env()
 
@@ -357,3 +369,5 @@ def test_access_control_policy_loads_from_environment(monkeypatch):
     assert policy.legacy_tenant_service_map == {
         "leasing-runpod-manual": "astl.dev.family"
     }
+    assert policy.legacy_tenant_service_contains_map == {"leasing": "astl.dev.family"}
+    assert policy.legacy_tenant_service_excludes == ("yytech.by",)
